@@ -1,0 +1,61 @@
+# Configuración de escenarios para el artículo
+scenarios:
+  E1:
+    name: "Despegue sin inclinación"
+    reference: [1.0, 0.0, 0.0, 0.0]
+    description: "Altura objetivo 1m, sin ángulos"
+    
+  E2:
+    name: "Despegue con inclinación inicial"
+    reference: [1.5, 0.1, -0.1, 0.0]
+    description: "Mayor altura con inclinaciones suaves"
+    
+  E3:
+    name: "Transición y cambio de altitud"
+    reference: [2.0, -0.2, 0.2, 0.0]
+    description: "Maniobra más agresiva"
+    
+  E4:
+    name: "Con movimiento de yaw"
+    reference: [1.0, 0.0, 0.0, 0.785]
+    description: "Giro de 45 grados en yaw"
+    
+  E5:
+    name: "Descenso controlado"
+    reference: [0.5, -0.1, -0.1, -0.524]
+    description: "Reducción de altitud con orientación"
+
+# Estrategias de límites a probar
+velocity_limits:
+  fraction:
+    - {name: "frac_0.05", factor: 0.05, description: "5% del rango"}
+    - {name: "frac_0.10", factor: 0.10, description: "10% del rango"}
+    - {name: "frac_0.20", factor: 0.20, description: "20% del rango"}
+    - {name: "frac_0.50", factor: 0.50, description: "50% del rango"}
+    
+  dynamic:
+    - {name: "dyn_0.20", factor: 0.20, description: "Decreciente 20%→0"}
+    
+  clerc:
+    - {name: "clerc", factor: 0.7298, description: "Constricción de Clerc"}
+    
+  fixed:
+    - {name: "fix_0.10", factor: 0.10, description: "Límite absoluto 0.1"}
+    - {name: "fix_0.50", factor: 0.50, description: "Límite absoluto 0.5"}
+
+# Configuración experimental
+experiment:
+  runs_per_strategy: 30
+  max_iterations: 100
+  population_size: 50
+  random_seed: 42
+  
+# Métricas para reportar en el artículo
+metrics:
+  - convergence_rate
+  - best_fitness
+  - fitness_std
+  - settling_time
+  - overshoot_percentage
+  - rmse
+  - computational_time
