@@ -31,20 +31,17 @@ WEIGHTS = {
 # Reference values for a "good" controller
 # Metrics below these references contribute nothing to the penalty
 REF = {
-    "itse": 0.2,         # ITSE of a well-tuned controller
-    "iae": 1.0,          # IAE of a well-tuned controller
-    "overshoot": 5.0,    # 5% overshoot is fine
-    "settling": 3.0,     # 3 seconds is fine
+    "itse": 0.05,
+    "iae": 0.3,
+    "overshoot": 2.0,
+    "settling": 1.0,
 }
-
-# Scale constants for log-normalization of excess
 SCALE = {
-    "itse": 1.0,
-    "iae": 2.0,
-    "overshoot": 20.0,
-    "settling": 5.0,
+    "itse": 0.5,
+    "iae": 1.0,
+    "overshoot": 10.0,
+    "settling": 2.0,
 }
-
 
 class QuadrotorFitness:
     """Fitness evaluator for a 12-gain PID controller."""

@@ -121,10 +121,10 @@ strategies:
 # ============================================================================
 experiment:
   runs_per_strategy: 30
-  max_iterations: 50
+  max_iterations: 100
   population_size: 30
   random_seed: 42
-  target_fitness: 0.05          
+  target_fitness: 0.15          
   early_stop_patience: 20       
   early_stop_tolerance: 1.0e-5
 
