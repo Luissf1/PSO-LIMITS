@@ -1,0 +1,139 @@
+# ============================================================================
+# Velocity limit strategies configuration
+# Each strategy is tested systematically with 30 independent runs
+# ============================================================================
+
+strategies:
+  # --------------------------------------------------------------------------
+  # FRACTION-BASED STRATEGIES
+  # v_max = factor * (var_max - var_min)
+  # --------------------------------------------------------------------------
+  - name: "fraction_0.05"
+    type: "fraction"
+    factor: 0.05
+    category: "fraction"
+    description: "Very restrictive bound (5% of search range)"
+
+  - name: "fraction_0.10"
+    type: "fraction"
+    factor: 0.10
+    category: "fraction"
+    description: "Restrictive bound (10% of search range)"
+
+  - name: "fraction_0.15"
+    type: "fraction"
+    factor: 0.15
+    category: "fraction"
+    description: "Moderate bound (15% of search range)"
+
+  - name: "fraction_0.20"
+    type: "fraction"
+    factor: 0.20
+    category: "fraction"
+    description: "Standard bound (20% of search range)"
+
+  - name: "fraction_0.25"
+    type: "fraction"
+    factor: 0.25
+    category: "fraction"
+    description: "Wide bound (25% of search range)"
+
+  - name: "fraction_0.30"
+    type: "fraction"
+    factor: 0.30
+    category: "fraction"
+    description: "Very wide bound (30% of search range)"
+
+  - name: "fraction_0.50"
+    type: "fraction"
+    factor: 0.50
+    category: "fraction"
+    description: "Extreme bound (50% of search range)"
+
+  # --------------------------------------------------------------------------
+  # DYNAMIC STRATEGIES
+  # v_max(t) = factor * (1 - t/T_max) * (var_max - var_min)
+  # --------------------------------------------------------------------------
+  - name: "dynamic_0.10"
+    type: "dynamic"
+    factor: 0.10
+    category: "dynamic"
+    description: "Linearly decreasing from 10% to 0%"
+
+  - name: "dynamic_0.20"
+    type: "dynamic"
+    factor: 0.20
+    category: "dynamic"
+    description: "Linearly decreasing from 20% to 0%"
+
+  - name: "dynamic_0.30"
+    type: "dynamic"
+    factor: 0.30
+    category: "dynamic"
+    description: "Linearly decreasing from 30% to 0%"
+
+  # --------------------------------------------------------------------------
+  # ADAPTIVE STRATEGIES (Clerc's constriction)
+  # v ← chi * v, with chi = 2k / |2 - phi - sqrt(phi^2 - 4*phi)|
+  # --------------------------------------------------------------------------
+  - name: "clerc"
+    type: "clerc"
+    factor: 0.7298
+    category: "adaptive"
+    description: "Classical Clerc constriction (chi = 0.7298)"
+
+  - name: "clerc_adaptive"
+    type: "clerc_adaptive"
+    factor: 0.7298
+    category: "adaptive"
+    description: "Adaptive Clerc with diversity-based scaling"
+
+  # --------------------------------------------------------------------------
+  # FIXED STRATEGIES
+  # |v| <= factor, regardless of search range
+  # --------------------------------------------------------------------------
+  - name: "fixed_0.05"
+    type: "fixed"
+    factor: 0.05
+    category: "fixed"
+    description: "Fixed absolute bound 0.05"
+
+  - name: "fixed_0.10"
+    type: "fixed"
+    factor: 0.10
+    category: "fixed"
+    description: "Fixed absolute bound 0.10"
+
+  - name: "fixed_0.20"
+    type: "fixed"
+    factor: 0.20
+    category: "fixed"
+    description: "Fixed absolute bound 0.20"
+
+  - name: "fixed_0.50"
+    type: "fixed"
+    factor: 0.50
+    category: "fixed"
+    description: "Fixed absolute bound 0.50"
+
+# ============================================================================
+# Experimental configuration
+# ============================================================================
+experiment:
+  runs_per_strategy: 30
+  max_iterations: 50
+  population_size: 30
+  random_seed: 42
+  target_fitness: 0.05          
+  early_stop_patience: 20       
+  early_stop_tolerance: 1.0e-5
+
+# ============================================================================
+# Ranking criteria for composite score
+# ============================================================================
+ranking:
+  weights:
+    mean_fitness: 0.50
+    std_fitness: 0.20
+    success_rate: 0.15
+    convergence_speed: 0.15

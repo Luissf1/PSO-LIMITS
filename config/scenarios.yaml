@@ -1,61 +1,44 @@
-# Configuración de escenarios para el artículo
+# ============================================================================
+# Simulation scenarios for quadrotor PID tuning
+# ============================================================================
+
 scenarios:
   E1:
-    name: "Despegue sin inclinación"
+    name: "Level takeoff"
     reference: [1.0, 0.0, 0.0, 0.0]
-    description: "Altura objetivo 1m, sin ángulos"
-    
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "Target altitude 1m, no angular deviation"
+
   E2:
-    name: "Despegue con inclinación inicial"
+    name: "Takeoff with initial tilt"
     reference: [1.5, 0.1, -0.1, 0.0]
-    description: "Mayor altura con inclinaciones suaves"
-    
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "Higher altitude with soft roll and pitch"
+
   E3:
-    name: "Transición y cambio de altitud"
+    name: "Aggressive maneuver"
     reference: [2.0, -0.2, 0.2, 0.0]
-    description: "Maniobra más agresiva"
-    
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "Larger altitude change with stronger tilts"
+
   E4:
-    name: "Con movimiento de yaw"
+    name: "Yaw rotation"
     reference: [1.0, 0.0, 0.0, 0.785]
-    description: "Giro de 45 grados en yaw"
-    
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "45 degree yaw rotation"
+
   E5:
-    name: "Descenso controlado"
+    name: "Controlled descent"
     reference: [0.5, -0.1, -0.1, -0.524]
-    description: "Reducción de altitud con orientación"
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "Altitude reduction with orientation change"
 
-# Estrategias de límites a probar
-velocity_limits:
-  fraction:
-    - {name: "frac_0.05", factor: 0.05, description: "5% del rango"}
-    - {name: "frac_0.10", factor: 0.10, description: "10% del rango"}
-    - {name: "frac_0.20", factor: 0.20, description: "20% del rango"}
-    - {name: "frac_0.50", factor: 0.50, description: "50% del rango"}
-    
-  dynamic:
-    - {name: "dyn_0.20", factor: 0.20, description: "Decreciente 20%→0"}
-    
-  clerc:
-    - {name: "clerc", factor: 0.7298, description: "Constricción de Clerc"}
-    
-  fixed:
-    - {name: "fix_0.10", factor: 0.10, description: "Límite absoluto 0.1"}
-    - {name: "fix_0.50", factor: 0.50, description: "Límite absoluto 0.5"}
-
-# Configuración experimental
-experiment:
-  runs_per_strategy: 30
-  max_iterations: 100
-  population_size: 50
-  random_seed: 42
-  
-# Métricas para reportar en el artículo
-metrics:
-  - convergence_rate
-  - best_fitness
-  - fitness_std
-  - settling_time
-  - overshoot_percentage
-  - rmse
-  - computational_time
+# ============================================================================
+# Default scenario for the main study
+# ============================================================================
+default_scenario: "E1"

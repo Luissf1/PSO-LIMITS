@@ -1,281 +1,195 @@
 """
-Experimento: Estudio del efecto de límites de velocidad en PSO para PID
+Systematic study of velocity limit strategies in PSO for quadrotor PID tuning.
 """
 
-import numpy as np
-from typing import Dict, List, Tuple
-import pandas as pd
-from datetime import datetime
+import json
 import logging
+import pickle
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
-from ..models.quadrotor import QuadrotorDynamics, QuadrotorParameters
-from ..controllers.pid import PIDController, PIDGains
+import numpy as np
+import pandas as pd
+import yaml
+
 from ..optimizers.pso import PSOConfig, ParticleSwarmOptimizer
-from ..utils.metrics import PerformanceMetrics
+from ..utils.fitness import QuadrotorFitness
 
-
-# Configurar logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
-class PIDFitness:
-    """Función de fitness para optimización PID"""
-    
-    def __init__(self, dynamics: QuadrotorDynamics, 
-                 reference: np.ndarray,
-                 t_span: Tuple[float, float] = (0, 10),
-                 weights: Dict[str, float] = None):
-        self.dynamics = dynamics
-        self.reference = reference
-        self.t_span = t_span
-        self.t_eval = np.linspace(t_span[0], t_span[1], 2000)
-        
-        # Pesos para diferentes métricas
-        self.weights = weights or {
-            'settling_time': 0.30,
-            'overshoot': 0.25,
-            'rmse': 0.25,
-            'control_effort': 0.20
-        }
-    
-    def __call__(self, gains_array: np.ndarray, **kwargs) -> float:
-        """
-        Evaluar fitness de un conjunto de ganancias PID
-        """
-        gains = PIDGains.from_array(gains_array)
-        controller = PIDController(gains, dt=0.01)
-        
-        # Función de control para simulación
-        def control_law(t, state):
-            # Extraer estados relevantes
-            z = state[2]  # Altura
-            phi, theta, psi = state[3], state[4], state[5]
-            states_pid = np.array([z, phi, theta, psi])
-            
-            return controller.compute(self.reference, states_pid)
-        
-        # Simular
-        initial_state = np.zeros(12)
-        result = self.dynamics.simulate(
-            control_law, initial_state, 
-            self.t_span, self.t_eval
-        )
-        
-        if not result['success']:
-            return 1000.0  # Penalización alta
-        
-        # Calcular métricas
-        metrics = PerformanceMetrics.compute_all(
-            result['t'], result['state'][2],  # Altura
-            self.reference[0],  # Referencia de altura
-            self.tol_settling=0.02
-        )
-        
-        # Calcular fitness ponderado
-        fitness = (
-            self.weights['settling_time'] * metrics['settling_time_norm'] +
-            self.weights['overshoot'] * metrics['overshoot_norm'] +
-            self.weights['rmse'] * metrics['rmse_norm'] +
-            self.weights['control_effort'] * metrics['control_effort_norm']
-        )
-        
-        # Penalizar si no alcanza referencia
-        if metrics['final_error'] > 0.05:
-            fitness += 0.5 * (metrics['final_error'] / 0.05)
-        
-        return fitness
+class SystematicLimitStudy:
+    """Run the systematic comparison of velocity limit strategies."""
 
-
-class VelocityLimitExperiment:
-    """Experimento para estudiar efecto de límites de velocidad"""
-    
-    def __init__(self, output_dir: str = "results"):
+    def __init__(self,
+                 config_path: str = "config/limit_strategies.yaml",
+                 scenario_path: str = "config/scenarios.yaml",
+                 output_dir: str = "results"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Configuración del problema
-        self.dynamics = QuadrotorDynamics(QuadrotorParameters())
-        
-        # Límites de búsqueda para ganancias PID
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            self.config = yaml.safe_load(f)
+        with open(scenario_path, "r", encoding="utf-8") as f:
+            self.scenarios = yaml.safe_load(f)
+
+        self.strategies = self.config["strategies"]
+        self.exp = self.config["experiment"]
+        self.default_scenario = self.scenarios["default_scenario"]
+        self.scenario = self.scenarios["scenarios"][self.default_scenario]
+
+        # Search bounds for the 12 gains
         self.var_min = np.array([
-            0.5, 0.0001, 0.01,   # Kp_z, Ki_z, Kd_z
-            0.01, 0.0001, 0.01,  # Kp_phi, Ki_phi, Kd_phi
-            0.01, 0.0001, 0.01,  # Kp_theta, Ki_theta, Kd_theta
-            0.01, 0.0001, 0.01   # Kp_psi, Ki_psi, Kd_psi
+            5.0,  0.1,  1.0,    # z
+            5.0,  0.1,  1.0,    # phi
+            5.0,  0.1,  1.0,    # theta
+            3.0,  0.05, 0.5,    # psi
         ])
-        
         self.var_max = np.array([
-            30.0, 5.0, 15.0,    # Altura
-            20.0, 0.5, 5.0,     # Roll
-            20.0, 0.5, 5.0,     # Pitch
-            20.0, 0.5, 5.0      # Yaw
+            40.0, 10.0, 20.0,   # z
+            60.0, 5.0,  15.0,   # phi
+            60.0, 5.0,  15.0,   # theta
+            40.0, 3.0,  10.0,   # psi
         ])
-        
-        # Configuración base de PSO
-        self.base_config = PSOConfig(
-            num_particles=30,
-            max_iterations=100,
-            w_min=0.4,
-            w_max=0.9,
-            c1=2.0,
-            c2=2.0,
-            tolerance=1e-6,
-            patience=15
+
+        # Fitness evaluator
+        self.fitness = QuadrotorFitness(
+            reference=np.array(self.scenario["reference"]),
+            initial_state=np.array(self.scenario["initial_state"]),
         )
-        
-        # Estrategias a probar
-        self.strategies = [
-            ('fraction_0.05', 'fraction', 0.05),
-            ('fraction_0.1', 'fraction', 0.1),
-            ('fraction_0.2', 'fraction', 0.2),
-            ('fraction_0.5', 'fraction', 0.5),
-            ('dynamic_0.2', 'dynamic', 0.2),
-            ('clerc', 'clerc', None),
-            ('fixed_0.1', 'fixed', 0.1),
-            ('fixed_0.5', 'fixed', 0.5),
-        ]
-    
-    def run_experiment(self, n_runs: int = 30, 
-                      reference: np.ndarray = None,
-                      save_results: bool = True) -> pd.DataFrame:
-        """
-        Ejecutar experimento completo
-        
-        Args:
-            n_runs: Número de ejecuciones por configuración
-            reference: Referencia [z_des, phi_des, theta_des, psi_des]
-            save_results: Guardar resultados en archivo
-            
-        Returns:
-            DataFrame con resultados
-        """
-        if reference is None:
-            reference = np.array([1.0, 0.0, 0.0, 0.0])  # Despegue simple
-        
-        logger.info("=" * 80)
-        logger.info("EXPERIMENTO: EFECTO DE LÍMITES DE VELOCIDAD EN PSO")
-        logger.info("=" * 80)
-        logger.info(f"Referencia: {reference}")
-        logger.info(f"Ejecuciones por estrategia: {n_runs}")
-        logger.info(f"Estrategias a probar: {len(self.strategies)}")
-        logger.info("=" * 80)
-        
-        # Almacenar resultados
-        all_results = []
-        
-        for strategy_name, strategy_type, factor in self.strategies:
-            logger.info(f"\n📊 Probando estrategia: {strategy_name}")
-            logger.info(f"   Tipo: {strategy_type}, Factor: {factor}")
-            
-            # Configurar PSO con esta estrategia
-            config = PSOConfig(
-                num_particles=self.base_config.num_particles,
-                max_iterations=self.base_config.max_iterations,
-                w_min=self.base_config.w_min,
-                w_max=self.base_config.w_max,
-                c1=self.base_config.c1,
-                c2=self.base_config.c2,
-                velocity_limit_strategy=strategy_type,
-                velocity_limit_factor=factor if factor else 0.2,
-                tolerance=self.base_config.tolerance,
-                patience=self.base_config.patience
-            )
-            
-            # Ejecutar múltiples veces
-            strategy_results = []
-            
-            for run in range(n_runs):
-                logger.info(f"   Ejecución {run + 1}/{n_runs}")
-                
-                # Crear función de fitness
-                fitness_func = PIDFitness(
-                    self.dynamics, reference,
-                    weights={'settling_time': 0.30, 'overshoot': 0.25,
-                            'rmse': 0.25, 'control_effort': 0.20}
-                )
-                
-                # Optimizar
-                optimizer = ParticleSwarmOptimizer(config, self.var_min, self.var_max)
-                result = optimizer.optimize(
-                    fitness_func, 
-                    fitness_kwargs={},
-                    verbose=False
-                )
-                
-                # Guardar resultados
-                strategy_results.append({
-                    'run': run,
-                    'best_fitness': result['best_fitness'],
-                    'iterations': result['num_iterations'],
-                    'convergence_speed': len(result['convergence']),
-                    'final_velocity': result['velocity_magnitudes'][-1] if result['velocity_magnitudes'] else 0,
-                    **{f'gain_{i}': result['best_position'][i] for i in range(12)}
-                })
-                
-                logger.info(f"      Fitness: {result['best_fitness']:.4f}, "
-                          f"Iter: {result['num_iterations']}")
-            
-            # Estadísticas de esta estrategia
-            df_strategy = pd.DataFrame(strategy_results)
-            stats = {
-                'strategy': strategy_name,
-                'type': strategy_type,
-                'factor': factor if factor else 0,
-                'mean_fitness': df_strategy['best_fitness'].mean(),
-                'std_fitness': df_strategy['best_fitness'].std(),
-                'min_fitness': df_strategy['best_fitness'].min(),
-                'max_fitness': df_strategy['best_fitness'].max(),
-                'mean_iterations': df_strategy['iterations'].mean(),
-                'success_rate': (df_strategy['best_fitness'] < 0.5).mean() * 100
-            }
-            
-            all_results.append(stats)
-            
-            # Guardar resultados detallados de esta estrategia
-            if save_results:
-                df_strategy.to_csv(
-                    self.output_dir / f"results_{strategy_name}.csv",
-                    index=False
-                )
-        
-        # Crear DataFrame resumen
-        summary_df = pd.DataFrame(all_results)
-        summary_df = summary_df.sort_values('mean_fitness')
-        
-        # Guardar resumen
-        if save_results:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            summary_df.to_csv(
-                self.output_dir / f"summary_{timestamp}.csv",
-                index=False
-            )
-            
-            # Guardar también en Excel con formato
-            with pd.ExcelWriter(self.output_dir / f"experiment_{timestamp}.xlsx") as writer:
-                summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                
-                # Guardar detalles de cada estrategia
-                for strategy_name, _, _ in self.strategies:
-                    file = self.output_dir / f"results_{strategy_name}.csv"
-                    if file.exists():
-                        df = pd.read_csv(file)
-                        df.to_excel(writer, sheet_name=strategy_name[:31], index=False)
-        
-        # Mostrar mejores resultados
-        logger.info("\n" + "=" * 80)
-        logger.info("RESULTADOS FINALES")
-        logger.info("=" * 80)
-        logger.info("\nTop 3 mejores estrategias:")
-        for idx, row in summary_df.head(3).iterrows():
-            logger.info(f"  {idx+1}. {row['strategy']}: "
-                       f"Fitness = {row['mean_fitness']:.4f} ± {row['std_fitness']:.4f}, "
-                       f"Éxito = {row['success_rate']:.1f}%")
-        
-        logger.info("\nPeores estrategias:")
-        for idx, row in summary_df.tail(3).iterrows():
-            logger.info(f"  {row['strategy']}: "
-                       f"Fitness = {row['mean_fitness']:.4f} ± {row['std_fitness']:.4f}")
-        
-        return summary_df
+
+    # ------------------------------------------------------------------
+    def evaluate_strategy(self, strategy: Dict,
+                          n_runs: Optional[int] = None) -> Dict:
+        """Run a single strategy n_runs times and return aggregate stats."""
+        n_runs = n_runs or self.exp["runs_per_strategy"]
+        name = strategy["name"]
+
+        logger.info(f"Strategy: {name} ({strategy['type']}, "
+                    f"factor={strategy['factor']})")
+
+        pso_config = PSOConfig(
+            num_particles=self.exp["population_size"],
+            max_iterations=self.exp["max_iterations"],
+            velocity_limit_strategy=strategy["type"],
+            velocity_limit_factor=strategy["factor"],
+            tolerance=self.exp["early_stop_tolerance"],
+            patience=self.exp["early_stop_patience"],
+        )
+
+        fitnesses = []
+        iterations = []
+        best_positions = []
+
+        for run in range(n_runs):
+            # Different seed per run for statistical independence
+            pso_config.random_seed = self.exp["random_seed"] + run
+            optimizer = ParticleSwarmOptimizer(pso_config,
+                                               self.var_min, self.var_max)
+            result = optimizer.optimize(self.fitness.evaluate)
+
+            fitnesses.append(result["best_fitness"])
+            iterations.append(result["num_iterations"])
+            best_positions.append(result["best_position"].tolist())
+
+            logger.info(f"  run {run+1}/{n_runs}: "
+                        f"fitness={result['best_fitness']:.6f}, "
+                        f"iters={result['num_iterations']}")
+
+        fitnesses = np.array(fitnesses)
+
+        return {
+            "name": name,
+            "type": strategy["type"],
+            "factor": strategy["factor"],
+            "category": strategy["category"],
+            "description": strategy["description"],
+            "mean_fitness": float(np.mean(fitnesses)),
+            "std_fitness": float(np.std(fitnesses)),
+            "min_fitness": float(np.min(fitnesses)),
+            "max_fitness": float(np.max(fitnesses)),
+            "median_fitness": float(np.median(fitnesses)),
+            "q1_fitness": float(np.percentile(fitnesses, 25)),
+            "q3_fitness": float(np.percentile(fitnesses, 75)),
+            "success_rate": float(np.mean(fitnesses < self.exp["target_fitness"]) * 100),
+            "mean_iterations": float(np.mean(iterations)),
+            "std_iterations": float(np.std(iterations)),
+            "all_fitness": fitnesses.tolist(),
+            "all_iterations": iterations,
+            "all_positions": best_positions,
+        }
+
+    # ------------------------------------------------------------------
+    def run(self, n_runs: Optional[int] = None) -> pd.DataFrame:
+        """Run all strategies."""
+        logger.info("=" * 70)
+        logger.info(f"Running {len(self.strategies)} strategies")
+        logger.info(f"Scenario: {self.default_scenario}")
+        logger.info("=" * 70)
+
+        results = []
+        for i, strategy in enumerate(self.strategies):
+            logger.info(f"[{i+1}/{len(self.strategies)}]")
+            results.append(self.evaluate_strategy(strategy, n_runs))
+            self._save_intermediate(results)
+
+        df = self._to_dataframe(results)
+        df = self._rank(df)
+        self._save_final(df, results)
+
+        return df
+
+    # ------------------------------------------------------------------
+    def _to_dataframe(self, results: List[Dict]) -> pd.DataFrame:
+        rows = []
+        for r in results:
+            row = {k: v for k, v in r.items() if not isinstance(v, list)}
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def _rank(self, df: pd.DataFrame) -> pd.DataFrame:
+        w = self.config["ranking"]["weights"]
+
+        # Lower is better for fitness
+        f = df["mean_fitness"]
+        df["rank_fitness"] = f.rank(method="min")
+        df["rank_std"] = df["std_fitness"].rank(method="min")
+        df["rank_success"] = df["success_rate"].rank(method="min",
+                                                     ascending=False)
+        df["rank_iter"] = df["mean_iterations"].rank(method="min")
+
+        max_rank = len(df)
+        df["composite_score"] = 1.0 - (
+            w["mean_fitness"] * (df["rank_fitness"] / max_rank)
+            + w["std_fitness"] * (df["rank_std"] / max_rank)
+            + w["success_rate"] * (df["rank_success"] / max_rank)
+            + w["convergence_speed"] * (df["rank_iter"] / max_rank)
+        )
+
+        df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
+        df["rank"] = range(1, len(df) + 1)
+        return df
+
+    # ------------------------------------------------------------------
+    def _save_intermediate(self, results: List[Dict]) -> None:
+        with open(self.output_dir / "intermediate.pkl", "wb") as f:
+            pickle.dump(results, f)
+
+    def _save_final(self, df: pd.DataFrame, results: List[Dict]) -> None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary = df.drop(columns=["all_fitness", "all_iterations",
+                                   "all_positions"], errors="ignore")
+        summary.to_csv(self.output_dir / f"summary_{timestamp}.csv", index=False)
+
+        with open(self.output_dir / f"detailed_{timestamp}.json", "w") as f:
+            json.dump({
+                "timestamp": timestamp,
+                "scenario": self.default_scenario,
+                "config": self.config,
+                "results": results,
+            }, f, indent=2)
+
+        logger.info(f"Saved results to {self.output_dir}")

@@ -1,79 +1,50 @@
 """
-Estudio de límites de velocidad en PSO para optimización PID de cuadrotor
-Tesis Doctorado - Luis Adrián Silva Reyes
+Main entry point for the velocity limit study.
 """
 
 import argparse
-from pathlib import Path
-from src.experiments.limit_study import VelocityLimitExperiment
 import numpy as np
+from pathlib import Path
+import time
+
+from src.experiments.limit_study import SystematicLimitStudy
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Estudio de límites de velocidad en PSO para PID"
+        description="Systematic study of velocity limits in PSO"
     )
-    parser.add_argument(
-        '--runs', type=int, default=30,
-        help='Número de ejecuciones por estrategia'
-    )
-    parser.add_argument(
-        '--scenario', type=int, default=1, choices=[1,2,3,4,5],
-        help='Escenario de prueba (1-5)'
-    )
-    parser.add_argument(
-        '--output', type=str, default='results',
-        help='Directorio de salida'
-    )
-    
+    parser.add_argument("--config", default="config/limit_strategies.yaml")
+    parser.add_argument("--scenario", default="config/scenarios.yaml")
+    parser.add_argument("--output", default="results")
+    parser.add_argument("--runs", type=int, default=None,
+                        help="Override number of runs per strategy")
+    parser.add_argument("--mode", choices=["full", "quick", "analyze"],
+                        default="full")
     args = parser.parse_args()
-    
-    # Definir escenarios
-    scenarios = {
-        1: np.array([1.0, 0.0, 0.0, 0.0]),        # Despegue simple
-        2: np.array([1.5, 0.1, -0.1, 0.0]),       # Inclinación inicial
-        3: np.array([2.0, -0.2, 0.2, 0.0]),       # Mayor altura
-        4: np.array([1.0, 0.0, 0.0, np.pi/4]),    # Con yaw
-        5: np.array([0.5, -0.1, -0.1, -np.pi/6])  # Descenso
-    }
-    
-    print("=" * 80)
-    print("ESTUDIO DE LÍMITES DE VELOCIDAD EN PSO PARA PID")
-    print("=" * 80)
-    print(f"Escenario: {args.scenario} - Referencia: {scenarios[args.scenario]}")
-    print(f"Ejecuciones por estrategia: {args.runs}")
-    print(f"Directorio de salida: {args.output}")
-    print("=" * 80)
-    
-    # Crear experimento
-    experiment = VelocityLimitExperiment(output_dir=args.output)
-    
-    # Ejecutar experimento
-    results = experiment.run_experiment(
-        n_runs=args.runs,
-        reference=scenarios[args.scenario],
-        save_results=True
+
+    if args.mode == "analyze":
+        from scripts.analyze import run_analysis
+        run_analysis(args.output)
+        return
+
+    study = SystematicLimitStudy(
+        config_path=args.config,
+        scenario_path=args.scenario,
+        output_dir=args.output,
     )
-    
-    # Mostrar recomendaciones
-    print("\n" + "=" * 80)
-    print("RECOMENDACIONES")
-    print("=" * 80)
-    
-    best = results.iloc[0]
-    print(f"\nMejor estrategia encontrada: {best['strategy']}")
-    print(f"  Fitness promedio: {best['mean_fitness']:.4f} ± {best['std_fitness']:.4f}")
-    print(f"  Tasa de éxito: {best['success_rate']:.1f}%")
-    
-    if 'fraction' in best['strategy']:
-        print(f"\n✓ Recomendación: Usar límite por fracción con factor {best['factor']}")
-    elif 'dynamic' in best['strategy']:
-        print(f"\n✓ Recomendación: Usar límite dinámico con factor inicial {best['factor']}")
-    elif 'clerc' in best['strategy']:
-        print("\n✓ Recomendación: Usar constricción de Clerc")
-    
-    print("\n✅ Experimento completado")
-    print(f"📁 Resultados guardados en: {args.output}/")
+
+    if args.mode == "quick":
+        # Only run 3 strategies for a quick smoke test
+        study.strategies = study.strategies[:3]
+
+    t0 = time.time()
+    df = study.run(n_runs=args.runs)
+    elapsed = time.time() - t0
+
+    print(f"\nTotal time: {elapsed/60:.2f} minutes")
+    print(df[["rank", "name", "mean_fitness", "std_fitness",
+              "success_rate", "mean_iterations", "composite_score"]])
 
 
 if __name__ == "__main__":
