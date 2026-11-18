@@ -21,6 +21,32 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
+def compute_composite_score(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Canonical composite score matching Eq. (14) in the manuscript:
+        Composite_i = (1/3) * sum_{m in {f, sigma, t}} ((N - r_{m,i} + 1) / N)
+    where rank 1 is best and score lies in (0, 1].
+    """
+    df = df.copy()
+    n = len(df)
+    df["rank_fitness"] = df["mean_fitness"].rank(method="min")
+    df["rank_std"] = df["std_fitness"].rank(method="min")
+    df["rank_iter"] = df["mean_iterations"].rank(method="min")
+
+    df["composite_score"] = (
+        ((n - df["rank_fitness"] + 1.0) / n)
+        + ((n - df["rank_std"] + 1.0) / n)
+        + ((n - df["rank_iter"] + 1.0) / n)
+    ) / 3.0
+
+    df = df.sort_values(
+        by=["composite_score", "mean_fitness"],
+        ascending=[False, True],
+    ).reset_index(drop=True)
+    df["rank"] = range(1, n + 1)
+    return df
+
+
 class SystematicLimitStudy:
     """Run the systematic comparison of velocity limit strategies."""
 
@@ -59,6 +85,7 @@ class SystematicLimitStudy:
         self.fitness = QuadrotorFitness(
             reference=np.array(self.scenario["reference"]),
             initial_state=np.array(self.scenario["initial_state"]),
+            simulation_time=float(self.scenario.get("duration", 10.0)),
         )
 
     # ------------------------------------------------------------------
@@ -85,7 +112,6 @@ class SystematicLimitStudy:
         best_positions = []
 
         for run in range(n_runs):
-            # Different seed per run for statistical independence
             pso_config.random_seed = self.exp["random_seed"] + run
             optimizer = ParticleSwarmOptimizer(pso_config,
                                                self.var_min, self.var_max)
@@ -108,7 +134,7 @@ class SystematicLimitStudy:
             "category": strategy["category"],
             "description": strategy["description"],
             "mean_fitness": float(np.mean(fitnesses)),
-            "std_fitness": float(np.std(fitnesses)),
+            "std_fitness": float(np.std(fitnesses, ddof=1)),
             "min_fitness": float(np.min(fitnesses)),
             "max_fitness": float(np.max(fitnesses)),
             "median_fitness": float(np.median(fitnesses)),
@@ -116,7 +142,7 @@ class SystematicLimitStudy:
             "q3_fitness": float(np.percentile(fitnesses, 75)),
             "success_rate": float(np.mean(fitnesses < self.exp["target_fitness"]) * 100),
             "mean_iterations": float(np.mean(iterations)),
-            "std_iterations": float(np.std(iterations)),
+            "std_iterations": float(np.std(iterations, ddof=1)),
             "all_fitness": fitnesses.tolist(),
             "all_iterations": iterations,
             "all_positions": best_positions,
@@ -137,9 +163,15 @@ class SystematicLimitStudy:
             self._save_intermediate(results)
 
         df = self._to_dataframe(results)
-        df = self._rank(df)
-        self._save_final(df, results)
+        df = compute_composite_score(df)
 
+        # Attach canonical rank & composite_score back onto results dicts
+        score_map = df.set_index("name")[["rank", "composite_score"]].to_dict("index")
+        for r in results:
+            r["rank"] = int(score_map[r["name"]]["rank"])
+            r["composite_score"] = float(score_map[r["name"]]["composite_score"])
+
+        self._save_final(df, results)
         return df
 
     # ------------------------------------------------------------------
@@ -149,29 +181,6 @@ class SystematicLimitStudy:
             row = {k: v for k, v in r.items() if not isinstance(v, list)}
             rows.append(row)
         return pd.DataFrame(rows)
-
-    def _rank(self, df: pd.DataFrame) -> pd.DataFrame:
-        w = self.config["ranking"]["weights"]
-
-        # Lower is better for fitness
-        f = df["mean_fitness"]
-        df["rank_fitness"] = f.rank(method="min")
-        df["rank_std"] = df["std_fitness"].rank(method="min")
-        df["rank_success"] = df["success_rate"].rank(method="min",
-                                                     ascending=False)
-        df["rank_iter"] = df["mean_iterations"].rank(method="min")
-
-        max_rank = len(df)
-        df["composite_score"] = 1.0 - (
-            w["mean_fitness"] * (df["rank_fitness"] / max_rank)
-            + w["std_fitness"] * (df["rank_std"] / max_rank)
-            + w["success_rate"] * (df["rank_success"] / max_rank)
-            + w["convergence_speed"] * (df["rank_iter"] / max_rank)
-        )
-
-        df = df.sort_values("composite_score", ascending=False).reset_index(drop=True)
-        df["rank"] = range(1, len(df) + 1)
-        return df
 
     # ------------------------------------------------------------------
     def _save_intermediate(self, results: List[Dict]) -> None:
