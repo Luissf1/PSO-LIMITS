@@ -1,31 +1,32 @@
 """
 Particle Swarm Optimization with configurable velocity limit strategies.
 
-Supports 16 strategies grouped into 4 families:
-  - fraction: v_max = factor * (var_max - var_min)
-  - dynamic:  v_max(t) = factor * (1 - t/T) * (var_max - var_min)
-  - clerc:    v <- chi * v
-  - fixed:    |v| <= factor
+Supports strategies grouped into 4 families (plus unclamped baseline):
+- none:     unclamped canonical inertia-weight PSO (baseline)
+- fraction: v_max = factor * (var_max - var_min)
+- dynamic:  v_max(t) = factor * (1 - t/T) * (var_max - var_min)
+- clerc:    canonical Clerc-Kennedy constriction (w=1.0, c1=c2=2.05, chi=0.7298)
+- fixed:    |v| <= factor
 """
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
 
 
 @dataclass
 class PSOConfig:
     """Configuration for the PSO optimizer."""
     num_particles: int = 30
-    max_iterations: int = 1000
+    max_iterations: int = 100
     w_min: float = 0.4
     w_max: float = 0.9
     c1: float = 1.496
     c2: float = 1.496
     velocity_limit_strategy: str = "fraction"
     velocity_limit_factor: float = 0.20
-    tolerance: float = 1e-6
-    patience: int = 50
+    tolerance: float = 1e-5
+    patience: int = 20
     random_seed: int = 42
 
 
@@ -40,8 +41,10 @@ class VelocityLimit:
               config: PSOConfig,
               iteration: int,
               **kwargs) -> np.ndarray:
-        """Dispatch to the correct strategy."""
+        """Dispatch to the correct velocity-handling strategy."""
         strategy = config.velocity_limit_strategy
+        if strategy == "none":
+            return velocity
         if strategy == "fraction":
             return VelocityLimit._fraction(velocity, var_min, var_max, config)
         if strategy == "dynamic":
@@ -69,19 +72,33 @@ class VelocityLimit:
         return np.clip(v, -bound, bound)
 
     @staticmethod
-    def _clerc(v, config):
-        phi = config.c1 + config.c2
+    def compute_chi(c1: float, c2: float) -> float:
+        """Compute canonical Clerc-Kennedy constriction factor (requires phi > 4)."""
+        phi = c1 + c2
+        if phi <= 4.0:
+            raise ValueError(
+                f"Clerc constriction requires phi = c1 + c2 > 4.0 (got phi={phi:.4f})."
+            )
         kappa = 1.0
-        denom = abs(2.0 - phi - np.sqrt(max(phi * phi - 4.0 * phi, 1e-12)))
-        chi = 2.0 * kappa / denom
+        denom = abs(2.0 - phi - np.sqrt(phi * phi - 4.0 * phi))
+        return float(2.0 * kappa / denom)
+
+    @staticmethod
+    def _clerc(v, config):
+        # Canonical Clerc-Kennedy uses c1 = c2 = 2.05 (phi = 4.1 -> chi = 0.72984)
+        c1 = 2.05 if (config.c1 + config.c2) <= 4.0 else config.c1
+        c2 = 2.05 if (config.c1 + config.c2) <= 4.0 else config.c2
+        chi = VelocityLimit.compute_chi(c1, c2)
         return v * chi
 
     @staticmethod
     def _clerc_adaptive(v, config, **kwargs):
-        # Adaptive chi: stronger damping when diversity is low
+        # Diversity-scaled Clerc constriction around base chi = 0.72984
         diversity = kwargs.get("diversity", 1.0)
-        base_chi = 0.7298
-        scale = 0.9 + 0.2 * diversity  # range roughly [0.9, 1.1]
+        c1 = 2.05 if (config.c1 + config.c2) <= 4.0 else config.c1
+        c2 = 2.05 if (config.c1 + config.c2) <= 4.0 else config.c2
+        base_chi = VelocityLimit.compute_chi(c1, c2)
+        scale = 0.9 + 0.2 * diversity  # range [0.9, 1.1]
         return v * base_chi * scale
 
     @staticmethod
@@ -113,6 +130,7 @@ class ParticleSwarmOptimizer:
         self.config = config
         self.var_min = np.asarray(var_min, dtype=float)
         self.var_max = np.asarray(var_max, dtype=float)
+        self.dim = len(self.var_min)
         self._rng = np.random.RandomState(config.random_seed)
 
         self.swarm = []
@@ -149,7 +167,11 @@ class ParticleSwarmOptimizer:
         self.diversity_history = []
         self.global_best_fitness = float("inf")
 
-        # Initial evaluation
+        is_clerc = self.config.velocity_limit_strategy in ("clerc", "clerc_adaptive")
+        c1 = 2.05 if is_clerc else self.config.c1
+        c2 = 2.05 if is_clerc else self.config.c2
+
+        # Initial evaluation (Iteration 0)
         for p in self.swarm:
             p.fitness = fitness_function(p.position)
             if p.fitness < p.best_fitness:
@@ -161,24 +183,28 @@ class ParticleSwarmOptimizer:
 
         self.convergence_history.append(self.global_best_fitness)
 
-        # Main loop
+        # Main optimization loop (stagnation tracked per ITERATION, not per particle)
         stagnation = 0
         for iteration in range(1, self.config.max_iterations + 1):
+            prev_best = self.global_best_fitness
             diversity = self._compute_diversity()
             self.diversity_history.append(diversity)
 
-            w = self.config.w_max - (self.config.w_max - self.config.w_min) * (
-                iteration / self.config.max_iterations
-            )
+            # Canonical Clerc constriction uses w = 1.0 (chi scales the entire velocity)
+            if is_clerc:
+                w = 1.0
+            else:
+                w = self.config.w_max - (self.config.w_max - self.config.w_min) * (
+                    (iteration - 1) / max(self.config.max_iterations - 1, 1)
+                )
 
             for p in self.swarm:
-                r1 = self._rng.rand()
-                r2 = self._rng.rand()
-                cognitive = self.config.c1 * r1 * (p.best_position - p.position)
-                social = self.config.c2 * r2 * (self.global_best_position - p.position)
+                # Per-dimension random vectors r1, r2 ~ U(0, 1)^D
+                r1 = self._rng.rand(self.dim)
+                r2 = self._rng.rand(self.dim)
+                cognitive = c1 * r1 * (p.best_position - p.position)
+                social = c2 * r2 * (self.global_best_position - p.position)
                 p.velocity = w * p.velocity + cognitive + social
-
-                self.velocity_magnitudes.append(float(np.mean(np.abs(p.velocity))))
 
                 p.velocity = VelocityLimit.apply(
                     p.velocity, p.position,
@@ -187,8 +213,14 @@ class ParticleSwarmOptimizer:
                     diversity=diversity,
                 )
 
-                p.position = np.clip(p.position + p.velocity,
-                                     self.var_min, self.var_max)
+                self.velocity_magnitudes.append(float(np.mean(np.abs(p.velocity))))
+
+                # Absorbing boundary condition: clamp position and zero velocity on boundary hit
+                next_pos = p.position + p.velocity
+                hit_lower = next_pos < self.var_min
+                hit_upper = next_pos > self.var_max
+                p.position = np.clip(next_pos, self.var_min, self.var_max)
+                p.velocity = np.where(hit_lower | hit_upper, 0.0, p.velocity)
 
                 p.fitness = fitness_function(p.position)
                 if p.fitness < p.best_fitness:
@@ -197,18 +229,21 @@ class ParticleSwarmOptimizer:
                 if p.fitness < self.global_best_fitness:
                     self.global_best_fitness = p.fitness
                     self.global_best_position = p.position.copy()
-                    stagnation = 0
-                else:
-                    stagnation += 1
 
             self.convergence_history.append(self.global_best_fitness)
+
+            # Iteration-level early stopping check
+            if (prev_best - self.global_best_fitness) > self.config.tolerance:
+                stagnation = 0
+            else:
+                stagnation += 1
 
             if stagnation >= self.config.patience:
                 if verbose:
                     print(f"Early stop at iteration {iteration}")
                 break
 
-            if verbose and iteration % 50 == 0:
+            if verbose and iteration % 25 == 0:
                 print(f"Iter {iteration}: best = {self.global_best_fitness:.6f}")
 
         return {
@@ -217,5 +252,5 @@ class ParticleSwarmOptimizer:
             "convergence": self.convergence_history,
             "velocity_magnitudes": self.velocity_magnitudes,
             "diversity": self.diversity_history,
-            "num_iterations": len(self.convergence_history),
+            "num_iterations": len(self.convergence_history) - 1,
         }
