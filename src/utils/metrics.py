@@ -3,7 +3,9 @@ Control performance metrics for quadrotor PID tuning.
 """
 
 import numpy as np
-from typing import Dict
+
+# Compatibility across NumPy 1.x and NumPy 2.x
+_trapz = getattr(np, "trapezoid", None) or np.trapz
 
 
 class PerformanceMetrics:
@@ -13,36 +15,33 @@ class PerformanceMetrics:
     def settling_time(t: np.ndarray,
                       y: np.ndarray,
                       reference: float,
-                      tolerance: float = 0.02) -> float:
-        """Time to enter and stay within a tolerance band."""
+                      tolerance: float = 0.05) -> float:
+        """Last time the response exceeds the tolerance band around reference."""
         t = np.asarray(t).flatten()
         y = np.asarray(y).flatten()
         error = np.abs(y - reference)
-        band = tolerance * abs(reference) if reference != 0 else tolerance
+        band = tolerance * abs(reference) if abs(reference) > 1e-6 else tolerance
 
-        inside = error <= band
-        if not np.any(inside):
-            return float(t[-1])
-
-        for i in range(len(t) - 1, -1, -1):
-            if inside[i] and np.all(inside[i:]):
-                return float(t[i])
-        return float(t[-1])
+        outside = error > band
+        if not np.any(outside):
+            return 0.0
+        last_outside = int(np.max(np.where(outside)[0]))
+        return float(t[last_outside])
 
     @staticmethod
     def overshoot(t: np.ndarray, y: np.ndarray, reference: float) -> float:
-        """Percentage overshoot relative to reference."""
-        if reference == 0:
+        """Percentage overshoot relative to non-zero reference."""
+        if abs(reference) <= 1e-6:
             return 0.0
         y = np.asarray(y).flatten()
-        peak = np.max(y / reference)
+        peak = float(np.max(y / reference))
         return float(max(0.0, (peak - 1.0) * 100.0))
 
     @staticmethod
     def rise_time(t: np.ndarray, y: np.ndarray, reference: float,
                   low: float = 0.1, high: float = 0.9) -> float:
         """Time from 10% to 90% of the reference."""
-        if reference == 0:
+        if abs(reference) <= 1e-6:
             return float(t[-1])
         t = np.asarray(t).flatten()
         y = np.asarray(y).flatten()
@@ -63,22 +62,22 @@ class PerformanceMetrics:
     @staticmethod
     def iae(t: np.ndarray, y: np.ndarray, reference: float) -> float:
         """Integral of Absolute Error."""
-        return float(np.trapz(np.abs(y - reference), t))
+        return float(_trapz(np.abs(y - reference), t))
 
     @staticmethod
     def ise(t: np.ndarray, y: np.ndarray, reference: float) -> float:
         """Integral of Squared Error."""
-        return float(np.trapz((y - reference) ** 2, t))
+        return float(_trapz((y - reference) ** 2, t))
 
     @staticmethod
     def itae(t: np.ndarray, y: np.ndarray, reference: float) -> float:
         """Integral of Time-weighted Absolute Error."""
-        return float(np.trapz(t * np.abs(y - reference), t))
+        return float(_trapz(t * np.abs(y - reference), t))
 
     @staticmethod
     def itse(t: np.ndarray, y: np.ndarray, reference: float) -> float:
         """Integral of Time-weighted Squared Error."""
-        return float(np.trapz(t * (y - reference) ** 2, t))
+        return float(_trapz(t * (y - reference) ** 2, t))
 
     @staticmethod
     def rmse(t: np.ndarray, y: np.ndarray, reference: float) -> float:

@@ -2,20 +2,16 @@
 Fitness function for quadrotor PID tuning.
 
 Design goals:
-  1. Discriminate between good, fair, and bad controllers.
-  2. Not be dominated by any single metric.
-  3. Return a value in [0, 1] where lower is better.
-
-The formula uses:
-  - ITSE and IAE as primary accuracy metrics.
-  - Overshoot and settling time as soft constraints (only penalized
-    when they exceed a threshold).
+1. Discriminate strictly between controllers across all 4 channels (z, phi, theta, psi).
+2. Avoid flat zero-fitness plateaus (m_ref = 0.0) so gradient/selection pressure persists.
+3. Return a bounded value in [0, 1] where lower is better.
 """
 
 import numpy as np
 from typing import Dict
 from ..controllers.pid import PIDGains, PIDController
 from ..models.quadrotor import QuadrotorDynamics, QuadrotorParameters
+from .metrics import PerformanceMetrics, _trapz
 
 
 FAILURE_FITNESS = 1.0
@@ -28,20 +24,21 @@ WEIGHTS = {
     "settling": 0.10,
 }
 
-# Reference values for a "good" controller
-# Metrics below these references contribute nothing to the penalty
+# Zero reference offsets eliminate the flat f = 0.0 dead-zone plateau
 REF = {
-    "itse": 0.05,
-    "iae": 0.3,
-    "overshoot": 2.0,
-    "settling": 1.0,
+    "itse": 0.0,
+    "iae": 0.0,
+    "overshoot": 0.0,
+    "settling": 0.0,
 }
+
 SCALE = {
     "itse": 0.5,
     "iae": 1.0,
     "overshoot": 10.0,
     "settling": 2.0,
 }
+
 
 class QuadrotorFitness:
     """Fitness evaluator for a 12-gain PID controller."""
@@ -52,7 +49,7 @@ class QuadrotorFitness:
                  simulation_time: float = 10.0,
                  dt: float = 0.01):
         self.reference = np.asarray(
-            reference if reference is not None else [1.0, 0.0, 0.0, 0.0],
+            reference if reference is not None else [1.5, 0.15, -0.15, 0.524],
             dtype=float)
         self.initial_state = np.asarray(
             initial_state if initial_state is not None else np.zeros(12),
@@ -110,40 +107,26 @@ class QuadrotorFitness:
         if np.any(np.abs(states[:6, :]) > 100):
             return None
 
-        z = states[2, :]
-        phi = states[3, :]
-        theta = states[4, :]
-        psi = states[5, :]
-
+        z, phi, theta, psi = states[2, :], states[3, :], states[4, :], states[5, :]
         ref = self.reference
 
+        # Combined L1 tracking error across all 4 controlled channels
         err = (np.abs(z - ref[0])
                + np.abs(phi - ref[1])
                + np.abs(theta - ref[2])
                + np.abs(psi - ref[3]))
 
-        itse = float(np.trapz(t * err ** 2, t))
-        iae = float(np.trapz(err, t))
+        itse = float(_trapz(t * err ** 2, t))
+        iae = float(_trapz(err, t))
 
-        overshoot = 0.0
-        for y, r in [(z, ref[0]), (phi, ref[1]),
-                     (theta, ref[2]), (psi, ref[3])]:
-            if abs(r) > 1e-6:
-                peak = float(np.max(y / r))
-                if peak > 1.0:
-                    overshoot = max(overshoot, (peak - 1.0) * 100.0)
-
-        # Settling time: use a 5% band (more realistic than 2%)
-        settling = 0.0
-        for y, r in [(z, ref[0]), (phi, ref[1]),
-                     (theta, ref[2]), (psi, ref[3])]:
-            if abs(r) > 1e-6:
-                error = np.abs(y - r)
-                band = 0.05 * abs(r)
-                outside = error > band
-                if np.any(outside):
-                    last_outside = np.max(np.where(outside)[0])
-                    settling = max(settling, float(t[last_outside]))
+        # Worst-case percentage overshoot and 5%-band settling time across all 4 channels
+        channels = [(z, ref[0]), (phi, ref[1]), (theta, ref[2]), (psi, ref[3])]
+        overshoot = max(
+            PerformanceMetrics.overshoot(t, y, r) for y, r in channels
+        )
+        settling = max(
+            PerformanceMetrics.settling_time(t, y, r, tolerance=0.05) for y, r in channels
+        )
 
         return {
             "itse": itse,
@@ -154,14 +137,9 @@ class QuadrotorFitness:
 
     def _combine(self, metrics: Dict[str, float]) -> float:
         """
-        Combine metrics into a single fitness value.
-
-        Only the EXCESS above the reference contributes to the penalty.
-        A well-tuned controller gets a fitness close to 0.
-        A poorly-tuned controller gets a fitness close to 1.
+        Combine metrics into a strictly discriminative fitness value in [0, 1).
         """
         def penalty(value, ref, scale):
-            """Excess above reference, log-normalized."""
             excess = max(0.0, value - ref)
             return np.log1p(excess / scale)
 
@@ -175,5 +153,4 @@ class QuadrotorFitness:
                + WEIGHTS["overshoot"] * p_os
                + WEIGHTS["settling"] * p_st)
 
-        # Normalize to [0, 1]
         return float(np.tanh(raw))
