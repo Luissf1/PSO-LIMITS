@@ -28,8 +28,8 @@ Thumbs.db
 .ipynb_checkpoints/
 
 # Results (los pesados, NO subir)
-results/
-figures/
+#results/
+#figures/
 
 # Logs
 *.log
