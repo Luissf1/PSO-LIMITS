@@ -8,7 +8,7 @@ scenarios:
     reference: [1.0, 0.0, 0.0, 0.0]
     initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     duration: 10.0
-    description: "Target altitude 1m, no angular deviation"
+    description: "Target altitude 1m, no angular deviation (1-DOF baseline)"
 
   E2:
     name: "Takeoff with initial tilt"
@@ -36,9 +36,16 @@ scenarios:
     reference: [0.5, -0.1, -0.1, -0.524]
     initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     duration: 10.0
-    description: "Altitude reduction with orientation change"
+    description: "Altitude reduction with full 3-axis orientation change"
+
+  E6:
+    name: "Coupled 4-DOF step maneuver"
+    reference: [1.5, 0.15, -0.15, 0.524]
+    initial_state: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    duration: 10.0
+    description: "Simultaneous step in altitude (1.5m), roll (+8.6 deg), pitch (-8.6 deg), and yaw (+30 deg) engaging all 12 PID gains"
 
 # ============================================================================
-# Default scenario for the main study
+# Default scenario for the main study (engages all 4 channels / 12 gains)
 # ============================================================================
-default_scenario: "E1"
+default_scenario: "E6"

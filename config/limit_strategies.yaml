@@ -5,6 +5,15 @@
 
 strategies:
   # --------------------------------------------------------------------------
+  # BASELINE (Unclamped canonical inertia-weight PSO)
+  # --------------------------------------------------------------------------
+  - name: "unclamped"
+    type: "none"
+    factor: 0.0
+    category: "baseline"
+    description: "Unclamped inertia-weight PSO (no velocity limit)"
+
+  # --------------------------------------------------------------------------
   # FRACTION-BASED STRATEGIES
   # v_max = factor * (var_max - var_min)
   # --------------------------------------------------------------------------
@@ -48,7 +57,19 @@ strategies:
     type: "fraction"
     factor: 0.50
     category: "fraction"
-    description: "Extreme bound (50% of search range)"
+    description: "Large bound (50% of search range)"
+
+  - name: "fraction_0.75"
+    type: "fraction"
+    factor: 0.75
+    category: "fraction"
+    description: "Extra wide bound (75% of search range)"
+
+  - name: "fraction_1.00"
+    type: "fraction"
+    factor: 1.00
+    category: "fraction"
+    description: "Full-range bound (100% of search range)"
 
   # --------------------------------------------------------------------------
   # DYNAMIC STRATEGIES
@@ -73,20 +94,20 @@ strategies:
     description: "Linearly decreasing from 30% to 0%"
 
   # --------------------------------------------------------------------------
-  # ADAPTIVE STRATEGIES (Clerc's constriction)
-  # v ← chi * v, with chi = 2k / |2 - phi - sqrt(phi^2 - 4*phi)|
+  # ADAPTIVE STRATEGIES (Clerc-Kennedy constriction: c1=c2=2.05, phi=4.1)
+  # v <- chi * v, with chi = 2 / |2 - phi - sqrt(phi^2 - 4*phi)| = 0.72984
   # --------------------------------------------------------------------------
   - name: "clerc"
     type: "clerc"
     factor: 0.7298
     category: "adaptive"
-    description: "Classical Clerc constriction (chi = 0.7298)"
+    description: "Classical Clerc-Kennedy constriction (c1=c2=2.05, chi=0.7298)"
 
   - name: "clerc_adaptive"
     type: "clerc_adaptive"
     factor: 0.7298
     category: "adaptive"
-    description: "Adaptive Clerc with diversity-based scaling"
+    description: "Diversity-scaled Clerc constriction (c1=c2=2.05, chi=0.7298)"
 
   # --------------------------------------------------------------------------
   # FIXED STRATEGIES
@@ -124,16 +145,15 @@ experiment:
   max_iterations: 100
   population_size: 30
   random_seed: 42
-  target_fitness: 0.15          
-  early_stop_patience: 20       
+  target_fitness: 0.15
+  early_stop_patience: 20
   early_stop_tolerance: 1.0e-5
 
 # ============================================================================
-# Ranking criteria for composite score
+# Ranking criteria for composite score (normalized to sum to 1.0)
 # ============================================================================
 ranking:
   weights:
     mean_fitness: 0.50
-    std_fitness: 0.20
-    success_rate: 0.15
-    convergence_speed: 0.15
+    std_fitness: 0.25
+    convergence_speed: 0.25

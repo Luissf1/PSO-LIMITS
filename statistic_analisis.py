@@ -1,30 +1,49 @@
-import json, glob
+"""
+Run omnibus Friedman test, Holm-Bonferroni adjusted pairwise Wilcoxon tests,
+and Cliff's delta effect sizes on the latest experimental JSON.
+"""
+
+import json
+import glob
+from pathlib import Path
+from src.utils.statistics import friedman_test, all_pairs_wilcoxon
 import numpy as np
-from scipy.stats import friedmanchisquare, wilcoxon
 
-# Cargar el JSON más reciente
-files = glob.glob('results/full_v4/detailed_*.json')
-latest = max(files, key=lambda p: __import__('pathlib').Path(p).stat().st_ctime)
-with open(latest) as f:
-    data = json.load(f)
 
-# Extraer matriz de fitness (16 estrategias × 30 runs)
-fitness_matrix = np.array([r['all_fitness'] for r in data['results']])
+def main():
+    files = glob.glob("results/**/detailed_*.json", recursive=True)
+    if not files:
+        raise FileNotFoundError("No detailed_*.json found under results/.")
+    latest = max(files, key=lambda p: Path(p).stat().st_ctime)
+    print(f"Analyzing: {latest}")
 
-# Friedman test
-stat, p = friedmanchisquare(*fitness_matrix)
-print(f"Friedman statistic: {stat:.2f}")
-print(f"Friedman p-value: {p:.6f}")
+    with open(latest, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-# Wilcoxon: clerc vs fixed_0.05
-clerc_idx = [r['name'] for r in data['results']].index('clerc')
-fixed_idx = [r['name'] for r in data['results']].index('fixed_0.05')
-stat_w, p_w = wilcoxon(fitness_matrix[clerc_idx], fitness_matrix[fixed_idx])
-print(f"Wilcoxon clerc vs fixed_0.05: stat={stat_w:.2f}, p={p_w:.6f}")
+    results = data["results"]
+    names = [r["name"] for r in results]
+    fitness_matrix = np.array([r["all_fitness"] for r in results])
 
-# Cliff's delta
-clerc_fit = fitness_matrix[clerc_idx]
-fixed_fit = fitness_matrix[fixed_idx]
-n1, n2 = len(clerc_fit), len(fixed_fit)
-delta = np.mean([np.sign(a - b) for a in clerc_fit for b in fixed_fit])
-print(f"Cliff's delta: {delta:.4f}")
+    # 1. Omnibus Friedman test
+    friedman = friedman_test(fitness_matrix)
+    print(f"\n=== Friedman Omnibus Test ===")
+    print(f"chi2({friedman['df']}) = {friedman['statistic']:.4f}, "
+          f"p = {friedman['p_value']:.4e}, "
+          f"Kendall's W = {friedman['kendalls_w']:.4f}")
+
+    # 2. Pairwise Wilcoxon signed-rank tests with Holm-Bonferroni correction
+    df_pairs, _ = all_pairs_wilcoxon(names, fitness_matrix)
+    out_csv = Path(latest).parent / "pairwise_wilcoxon_holm.csv"
+    df_pairs.to_csv(out_csv, index=False)
+    print(f"Saved {len(df_pairs)} Holm-adjusted pairwise tests to: {out_csv}")
+
+    # 3. Print comparisons involving 'clerc'
+    clerc_rows = df_pairs[
+        (df_pairs["strategy_a"] == "clerc") | (df_pairs["strategy_b"] == "clerc")
+    ]
+    print("\n=== Pairwise Comparisons vs. 'clerc' (Holm-Bonferroni corrected) ===")
+    print(clerc_rows.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()
